@@ -2,9 +2,8 @@ extern crate instant;
 extern crate time;
 
 use crate::{InputCallback, Key, KeyRepeat};
+use instant::{Duration, Instant};
 use std::mem;
-use self::instant::{Instant, Duration};
-
 
 pub struct KeyHandler {
     pub key_callback: Option<Box<dyn InputCallback>>,

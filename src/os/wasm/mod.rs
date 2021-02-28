@@ -1,36 +1,41 @@
 #![cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::Clamped;
+use wasm_bindgen::JsCast;
+use web_sys::ImageData;
+use web_sys::{window, CanvasRenderingContext2d, HtmlCanvasElement};
 
-use stdweb::{
-    unstable::TryInto,
-    web::{
-        self, document, html_element::CanvasElement, window, CanvasRenderingContext2d, INode,
-        IParentNode, ImageData,
-    },
-};
+use crate::error::Error;
+use crate::key_handler::KeyHandler;
+use crate::mouse_handler;
+use crate::rate::UpdateRate;
+use crate::InputCallback;
+use crate::Result;
+use crate::{CursorStyle, MouseButton, MouseMode};
+use crate::{Key, KeyRepeat};
+use crate::{MenuHandle, MenuItem, MenuItemHandle, UnixMenu, UnixMenuItem};
+use crate::{Scale, WindowOptions};
 
-use buffer_helper;
-use error::Error;
-use key_handler::KeyHandler;
-use mouse_handler;
-use InputCallback;
-use Result;
-use {CursorStyle, MouseButton, MouseMode};
-use {Key, KeyRepeat};
-use {MenuHandle, MenuItem, MenuItemHandle, UnixMenu, UnixMenuItem};
-use {Scale, WindowOptions};
-
+use core;
 use std::os::raw;
+
+#[inline(always)]
+#[allow(dead_code)] // Only used on 32-bit builds currently
+pub fn u32_as_u8<'a>(src: &'a [u32]) -> &'a [u8] {
+    unsafe { core::slice::from_raw_parts(src.as_ptr() as *mut u8, src.len() * 4) }
+}
 
 pub struct Window {
     width: u32,
     height: u32,
+    bg_color: u32,
     mouse_pos: Option<(i32, i32)>,
     mouse_scroll: Option<(i32, i32)>,
     /// The state of the left, middle and right mouse buttons
     mouse_state: (bool, bool, bool),
     window_scale: usize,
-
-    canvas: CanvasElement,
+    img_data: ImageData,
+    canvas: HtmlCanvasElement,
     context: CanvasRenderingContext2d,
 
     key_handler: KeyHandler,
@@ -40,50 +45,47 @@ pub struct Window {
 
 impl Window {
     pub fn new(name: &str, width: usize, height: usize, opts: WindowOptions) -> Result<Window> {
-        stdweb::initialize();
-
-        js!(
-            window.onload = function() {
-                console.log("Hello");
-            }
-        );
-
-        let document = document();
+        let buffer = vec![0u8; width * height * 4];
+        let document = window().unwrap().document().unwrap();
         document.set_title(name);
 
         // Create a canvas element and place it in the window
-        let canvas: CanvasElement = document
+        let canvas = document
             .create_element("canvas")
             .unwrap()
-            .try_into()
+            .dyn_into::<HtmlCanvasElement>()
             .unwrap();
 
         let body = document.body().unwrap();
-        body.append_child(&canvas);
+        body.append_child(&canvas).unwrap();
 
         canvas.set_width(width as u32);
         canvas.set_height(height as u32);
 
         // Create an image buffer
-        let context: CanvasRenderingContext2d = canvas.get_context().unwrap();
-
+        let context: CanvasRenderingContext2d = canvas
+            .get_context("2d")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<CanvasRenderingContext2d>()
+            .unwrap();
+        context.set_image_smoothing_enabled(false);
+        let img_data = ImageData::new_with_sw(width as u32, height as u32).unwrap();
         let mut window = Window {
             width: width as u32,
             height: height as u32,
+            bg_color: 0,
             mouse_pos: None,
             mouse_scroll: None,
             mouse_state: (false, false, false),
             window_scale: 1,
-
+            img_data,
             canvas,
             context,
-
             key_handler: KeyHandler::new(),
             menu_counter: MenuHandle(0),
             menus: Vec::new(),
         };
-
-        stdweb::event_loop();
 
         window.set_title(name);
 
@@ -92,51 +94,75 @@ impl Window {
 
     #[inline]
     pub fn set_title(&mut self, title: &str) {
-        document().set_title(title);
+        let document = window().unwrap().document().unwrap();
+        document.set_title(title);
     }
+
+    #[inline]
+    pub fn set_rate(&mut self, rate: Option<std::time::Duration>) {}
+
+    #[inline]
+    pub fn update_rate(&mut self) {}
 
     #[inline]
     pub fn get_window_handle(&self) -> *mut raw::c_void {
         0 as *mut raw::c_void
     }
 
+    #[inline]
+    pub fn topmost(&self, topmost: bool) {
+        // TODO?
+    }
+
+    pub fn set_background_color(&mut self, bg_color: u32) {
+        self.bg_color = bg_color;
+    }
+
+    pub fn set_cursor_visibility(&mut self, visibility: bool) {
+        //TODO?
+    }
+
+    pub fn update_with_buffer_stride(
+        &mut self,
+        buffer: &[u32],
+        buf_width: usize,
+        buf_height: usize,
+        buf_stride: usize,
+    ) -> Result<()> {
+        //buffer_helper::check_buffer_size(buf_width, buf_height, buf_width, buffer)?;
+        // scaling not implemented. It's faster to just update the buffer
+        // unsafe { self.scale_buffer(buffer, buf_width, buf_height, buf_stride) };
+        self.update_with_buffer(&buffer).unwrap();
+
+        Ok(())
+    }
+
     pub fn update_with_buffer(&mut self, buffer: &[u32]) -> Result<()> {
-        buffer_helper::check_buffer_size(
+        /*buffer_helper::check_buffer_size(
             self.width as usize,
             self.height as usize,
             self.window_scale,
             buffer,
-        )?;
+        )?;*/
+        let mut data = u32_as_u8(buffer);
 
-        let image_data = self
-            .context
-            .create_image_data(self.width as f64, self.height as f64)
-            .unwrap();
-
-        for i in 0..buffer.len() {
-            let pixel = buffer[i];
-            let r = ((pixel & 0x00FF0000) >> 16) as u8;
-            let g = ((pixel & 0x0000FF00) >> 8) as u8;
-            let b = (pixel & 0x000000FF) as u8;
-            let a = ((pixel & 0xFF000000) >> 24) as u8;
-
-            let index = i as u32 * 4;
-            js!(
-                @{&image_data}.data[@{index} + 0] = @{r};  // R value
-                @{&image_data}.data[@{index} + 1] = @{g};  // G value
-                @{&image_data}.data[@{index} + 2] = @{b};  // B value
-                @{&image_data}.data[@{index} + 3] = @{a};  // A value
-            );
-        }
-
-        self.context.put_image_data(image_data, 0.0, 0.0).unwrap();
+        self.img_data = ImageData::new_with_u8_clamped_array_and_sh(
+            Clamped(&mut data),
+            self.width,
+            self.height,
+        )
+        .unwrap();
 
         self.update();
 
         Ok(())
     }
 
-    pub fn update(&mut self) {}
+    pub fn update(&mut self) {
+        self.context
+            .put_image_data(&self.img_data, 0.0, 0.0)
+            .unwrap();
+    }
 
     #[inline]
     pub fn set_position(&mut self, x: isize, y: isize) {}
@@ -208,6 +234,10 @@ impl Window {
         true
     }
 
+    #[inline]
+    pub fn get_keys_released(&self) -> Option<Vec<Key>> {
+        self.key_handler.get_keys_released()
+    }
     pub fn is_active(&mut self) -> bool {
         true
     }
@@ -224,10 +254,6 @@ impl Window {
         menu.handle = handle;
         self.menus.push(menu);
         handle
-    }
-
-    pub fn get_unix_menus(&self) -> Option<&Vec<UnixMenu>> {
-        Some(&self.menus)
     }
 
     pub fn remove_menu(&mut self, handle: MenuHandle) {
@@ -278,4 +304,14 @@ impl Menu {
     }
 
     pub fn remove_item(&mut self, handle: &MenuItemHandle) {}
+}
+
+unsafe impl raw_window_handle::HasRawWindowHandle for Window {
+    fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
+        let handle = raw_window_handle::web::WebHandle {
+            id: 1, //TODO: assign a different ID to each window
+            ..raw_window_handle::web::WebHandle::empty()
+        };
+        raw_window_handle::RawWindowHandle::Web(handle)
+    }
 }
