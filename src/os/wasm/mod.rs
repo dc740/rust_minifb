@@ -263,6 +263,39 @@ impl Window {
     pub fn is_menu_pressed(&mut self) -> Option<usize> {
         None
     }
+    
+    pub fn eventlistener_keyboardevent_keydown(&mut self){
+        let window = web_sys::window().expect("global window does not exists");    
+        let document = window.document().expect("expecting a document on window");
+    
+        let text_area = document.get_element_by_id("text_area")
+                                .unwrap()
+                                .dyn_into::<web_sys::HtmlTextAreaElement>()
+                                .unwrap();
+    
+        let message = document.get_element_by_id("message")
+                                .unwrap()
+                                .dyn_into::<web_sys::HtmlParagraphElement>()
+                                .unwrap();
+    
+        let on_keydown = EventListener::new(&text_area, "keydown", move |event| {
+    
+        let keyboard_event = event.clone()
+                            .dyn_into::<web_sys::KeyboardEvent>()
+                            .unwrap();
+    
+                let mut event_string = String::from("");
+                event_string.push_str(&event.type_());
+                event_string.push_str(&" : ");
+                event_string.push_str(&keyboard_event.key());
+                
+                message.set_text_content(Some(&event_string));
+        
+        });
+    
+        on_keydown.forget();     
+        
+    }
 }
 
 pub struct Menu {
