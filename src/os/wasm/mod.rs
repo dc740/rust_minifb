@@ -283,18 +283,15 @@ impl Window {
         let keyboard_event = event.clone()
                             .dyn_into::<web_sys::KeyboardEvent>()
                             .unwrap();
-    
-                let mut event_string = String::from("");
-                event_string.push_str(&event.type_());
-                event_string.push_str(&" : ");
-                event_string.push_str(&keyboard_event.key());
-                
-                message.set_text_content(Some(&event_string));
-        
+        self.update_key_state(keyboard_event, true);
         });
     
         on_keydown.forget();     
         
+    }
+    fn update_key_state(&mut self, & event : web_sys::KeyboardEvent, is_down: bool) {
+        let key = event_to_key(event);
+        self.key_handler.set_key_state(key, is_down);
     }
 }
 
