@@ -1,3 +1,4 @@
+use crate::key::Key;
 pub const BACKSPACE: &'static str = "Backspace";
 pub const TAB: &'static str = "Tab";
 pub const ENTER: &'static str = "Enter";
@@ -108,15 +109,15 @@ pub const BACKSLASH: &'static str = "Backslash";
 pub const BRACKET_RIGHT: &'static str = "BracketRight";
 pub const QUOTE: &'static str = "Quote";
 
-pub fn event_to_key(& event : web_sys::KeyboardEvent) -> Key{
-        match event.code().to_str() {
+pub fn event_to_key(event : &web_sys::KeyboardEvent) -> Key{
+        match event.code().as_str() {
             BACKSPACE=> Key::Backspace,
             TAB=> Key::Tab,
             ENTER=> Key::Enter,
             SHIFT_LEFT=> Key::LeftShift,
             SHIFT_RIGHT=> Key::RightShift,
-            CONTROL_LEFT=> Key::LeftControl,
-            CONTROL_RIGHT=> Key::RightControl,
+            CONTROL_LEFT=> Key::LeftCtrl,
+            CONTROL_RIGHT=> Key::RightCtrl,
             ALT_LEFT=> Key::LeftAlt,
             ALT_RIGHT=> Key::RightAlt,
             PAUSE=> Key::Pause,
@@ -127,11 +128,10 @@ pub fn event_to_key(& event : web_sys::KeyboardEvent) -> Key{
             PAGE_DOWN=> Key::PageDown,
             END=> Key::End,
             HOME=> Key::Home,
-            ARROW_LEFT=> Key::ArrowLeft,
-            ARROW_UP=> Key::ArrowUp,
-            ARROW_RIGHT=> Key::ArrowRight,
-            ARROW_DOWN=> Key::ArrowDown,
-            PRINT_SCREEN=> Key::PrintScreen,
+            ARROW_LEFT=> Key::Left,
+            ARROW_UP=> Key::Up,
+            ARROW_RIGHT=> Key::Right,
+            ARROW_DOWN=> Key::Down,
             INSERT=> Key::Insert,
             DELETE=> Key::Delete,
             DIGIT_0=> Key::Key0,
@@ -212,6 +212,7 @@ pub fn event_to_key(& event : web_sys::KeyboardEvent) -> Key{
             QUOTE=> Key::Apostrophe,
             _ => {
                 /*
+                PRINT_SCREEN=> Key::PrintScreen,
                 META_LEFT=> Key::MetaLeft,
                 META_RIGHT=> Key::MetaRight,
                 CONTEXT_MENU=> Key::ContextMenu,
@@ -223,7 +224,7 @@ pub fn event_to_key(& event : web_sys::KeyboardEvent) -> Key{
                 LAUNCH_APP2=> Key::LaunchApp2,
                 */
                 // ignore other keys
-                Key::Unknown;
+                Key::Unknown
             }
         }
     }

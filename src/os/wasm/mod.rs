@@ -1,22 +1,25 @@
+mod keycodes;
+
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::Clamped;
 use wasm_bindgen::JsCast;
 use web_sys::ImageData;
 use web_sys::{window, CanvasRenderingContext2d, HtmlCanvasElement};
 
-use crate::error::Error;
+use crate::buffer_helper;
 use crate::key_handler::KeyHandler;
 use crate::mouse_handler;
-use crate::rate::UpdateRate;
 use crate::InputCallback;
 use crate::Result;
 use crate::{CursorStyle, MouseButton, MouseMode};
 use crate::{Key, KeyRepeat};
 use crate::{MenuHandle, MenuItem, MenuItemHandle, UnixMenu, UnixMenuItem};
 use crate::{Scale, WindowOptions};
-
 use core;
+use keycodes::event_to_key;
+use std::cell::{Cell, RefCell};
 use std::os::raw;
+use std::rc::Rc;
 
 #[inline(always)]
 #[allow(dead_code)] // Only used on 32-bit builds currently
@@ -24,27 +27,39 @@ pub fn u32_as_u8<'a>(src: &'a [u32]) -> &'a [u8] {
     unsafe { core::slice::from_raw_parts(src.as_ptr() as *mut u8, src.len() * 4) }
 }
 
+struct MouseState {
+    pos: Cell<Option<(i32, i32)>>,
+    scroll: Cell<Option<(i32, i32)>>,
+    left_button: Cell<bool>,
+    right_button: Cell<bool>,
+    middle_button: Cell<bool>,
+}
+
 pub struct Window {
     width: u32,
     height: u32,
     bg_color: u32,
-    mouse_pos: Option<(i32, i32)>,
-    mouse_scroll: Option<(i32, i32)>,
-    /// The state of the left, middle and right mouse buttons
-    mouse_state: (bool, bool, bool),
     window_scale: usize,
     img_data: ImageData,
     canvas: HtmlCanvasElement,
-    context: CanvasRenderingContext2d,
-
-    key_handler: KeyHandler,
+    context: Rc<CanvasRenderingContext2d>,
+    mouse_state: Rc<MouseState>,
+    key_handler: Rc<RefCell<KeyHandler>>,
     menu_counter: MenuHandle,
     menus: Vec<UnixMenu>,
 }
 
 impl Window {
     pub fn new(name: &str, width: usize, height: usize, opts: WindowOptions) -> Result<Window> {
-        let buffer = vec![0u8; width * height * 4];
+                let window_scale = match opts.scale {
+            Scale::X1 => 1,
+            Scale::X2 => 2,
+            Scale::X4 => 4,
+            Scale::X8 => 8,
+            Scale::X16 => 16,
+            Scale::X32 => 32,
+            Scale::FitScreen => 1 //TODO: Resize the canvas and implement this
+        };
         let document = window().unwrap().document().unwrap();
         document.set_title(name);
 
@@ -63,13 +78,6 @@ impl Window {
         // set this to get the keyboard events
         canvas.set_attribute("tabindex", "0").unwrap();
 
-        let on_keydown = EventListener::new(&canvas, "keydown", move |event| {
-            let keyboard_event = event.clone().dyn_into::<web_sys::KeyboardEvent>().unwrap();
-            self.update_key_state(keyboard_event, true);
-        });
-        //Keeps the EventListener alive forever, so it will never be dropped.
-        //This should only be used when you want the EventListener to last forever, otherwise it will leak memory!
-        on_keydown.forget();
         // Create an image buffer
         let context: CanvasRenderingContext2d = canvas
             .get_context("2d")
@@ -79,18 +87,90 @@ impl Window {
             .unwrap();
         context.set_image_smoothing_enabled(false);
         let img_data = ImageData::new_with_sw(width as u32, height as u32).unwrap();
+        let context = Rc::new(context);
+        //        let key_handler: Rc::<RefCell<KeyHandler>::new(RefCell::<KeyHandler>::new(key_handler));
+        let key_handler = Rc::new(RefCell::new(KeyHandler::new()));
+        let mouse_struct = MouseState {
+            pos: Cell::new(None),
+            scroll: Cell::new(None),
+            left_button: Cell::new(false),
+            right_button: Cell::new(false),
+            middle_button: Cell::new(false),
+        };
+        let mouse_state = Rc::new(mouse_struct);
+        {
+            let key_handler = key_handler.clone();
+            let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+                let key = event_to_key(&event);
+                key_handler.borrow_mut().set_key_state(key, true);
+            }) as Box<dyn FnMut(_)>);
+            canvas.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())?;
+            closure.forget(); // FYI, the closure now lives forevah... evah... evah...
+        }
+        {
+            let key_handler = key_handler.clone();
+            let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+                let key = event_to_key(&event);
+                key_handler.borrow_mut().set_key_state(key, false);
+            }) as Box<dyn FnMut(_)>);
+            canvas.add_event_listener_with_callback("keyup", closure.as_ref().unchecked_ref())?;
+            closure.forget(); // FYI, the closure now lives forevah... evah... evah...
+        }
+        {
+            let mouse_state = mouse_state.clone();
+            let closure = Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+                mouse_state
+                    .pos
+                    .set(Some((event.offset_x() as i32, event.offset_y() as i32)));
+                match event.button() {
+                    0 => mouse_state.left_button.set(true),
+                    1 => mouse_state.middle_button.set(true),
+                    2 => mouse_state.right_button.set(true),
+                    _ => (),
+                }
+            }) as Box<dyn FnMut(_)>);
+            canvas
+                .add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref())?;
+            closure.forget();
+        }
+        {
+            let mouse_state = mouse_state.clone();
+            let closure = Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+                mouse_state
+                    .pos
+                    .set(Some((event.offset_x() as i32, event.offset_y() as i32)));
+            }) as Box<dyn FnMut(_)>);
+            canvas
+                .add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref())?;
+            closure.forget();
+        }
+        {
+            let mouse_state = mouse_state.clone();
+            let closure = Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+                mouse_state
+                    .pos
+                    .set(Some((event.offset_x() as i32, event.offset_y() as i32)));
+                match event.button() {
+                    0 => mouse_state.left_button.set(false),
+                    1 => mouse_state.middle_button.set(false),
+                    2 => mouse_state.right_button.set(false),
+                    _ => (),
+                }
+            }) as Box<dyn FnMut(_)>);
+            canvas.add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref())?;
+            closure.forget();
+        }
+
         let mut window = Window {
             width: width as u32,
             height: height as u32,
             bg_color: 0,
-            mouse_pos: None,
-            mouse_scroll: None,
-            mouse_state: (false, false, false),
-            window_scale: 1,
+            window_scale,
             img_data,
             canvas,
-            context,
-            key_handler: KeyHandler::new(),
+            context: context.clone(),
+            key_handler,
+            mouse_state,
             menu_counter: MenuHandle(0),
             menus: Vec::new(),
         };
@@ -137,21 +217,21 @@ impl Window {
         buf_height: usize,
         buf_stride: usize,
     ) -> Result<()> {
-        //buffer_helper::check_buffer_size(buf_width, buf_height, buf_width, buffer)?;
+        buffer_helper::check_buffer_size(buf_width, buf_height, buf_width, buffer)?;
         // scaling not implemented. It's faster to just update the buffer
-        // unsafe { self.scale_buffer(buffer, buf_width, buf_height, buf_stride) };
+        //unsafe { self.scale_buffer(buffer, buf_width, buf_height, buf_stride) };
         self.update_with_buffer(&buffer).unwrap();
 
         Ok(())
     }
 
     pub fn update_with_buffer(&mut self, buffer: &[u32]) -> Result<()> {
-        /*buffer_helper::check_buffer_size(
+        buffer_helper::check_buffer_size(
             self.width as usize,
             self.height as usize,
             self.window_scale,
             buffer,
-        )?;*/
+        )?;
         let mut data = u32_as_u8(buffer);
 
         self.img_data = ImageData::new_with_u8_clamped_array_and_sh(
@@ -167,7 +247,7 @@ impl Window {
     }
 
     pub fn update(&mut self) {
-        self.key_handler.update();
+        self.key_handler.borrow_mut().update();
         self.context
             .put_image_data(&self.img_data, 0.0, 0.0)
             .unwrap();
@@ -182,18 +262,40 @@ impl Window {
     }
 
     pub fn get_mouse_pos(&self, mode: MouseMode) -> Option<(f32, f32)> {
-        None
+        if let Some((mouse_x, mouse_y)) = self.mouse_state.pos.get() {
+            mouse_handler::get_pos(
+                mode,
+                mouse_x as f32,
+                mouse_y as f32,
+                self.window_scale as f32,
+                self.width as f32 * self.window_scale as f32,
+                self.height as f32 * self.window_scale as f32,
+            )
+        } else {
+            None
+        }
     }
 
     pub fn get_unscaled_mouse_pos(&self, mode: MouseMode) -> Option<(f32, f32)> {
-        None
+        if let Some((mouse_x, mouse_y)) = self.mouse_state.pos.get() {
+            mouse_handler::get_pos(
+                mode,
+                mouse_x as f32,
+                mouse_y as f32,
+                1.0 as f32,
+                self.width as f32 * self.window_scale as f32,
+                self.height as f32 * self.window_scale as f32,
+            )
+        } else {
+            None
+        }
     }
 
     pub fn get_mouse_down(&self, button: MouseButton) -> bool {
         match button {
-            MouseButton::Left => self.mouse_state.0,
-            MouseButton::Middle => self.mouse_state.1,
-            MouseButton::Right => self.mouse_state.2,
+            MouseButton::Left => self.mouse_state.left_button.get(),
+            MouseButton::Middle => self.mouse_state.middle_button.get(),
+            MouseButton::Right => self.mouse_state.right_button.get(),
         }
     }
 
@@ -205,39 +307,35 @@ impl Window {
     pub fn set_cursor_style(&mut self, cursor: CursorStyle) {}
 
     pub fn get_keys(&self) -> Option<Vec<Key>> {
-        self.key_handler.get_keys()
+        self.key_handler.borrow().get_keys()
     }
 
     pub fn get_keys_pressed(&self, repeat: KeyRepeat) -> Option<Vec<Key>> {
-        self.key_handler.get_keys_pressed(repeat)
-    }
-
-    pub fn get_keys_released(&self) -> Option<Vec<Key>> {
-        self.key_handler.get_keys_released()
+        self.key_handler.borrow().get_keys_pressed(repeat)
     }
 
     pub fn is_key_down(&self, key: Key) -> bool {
-        self.key_handler.is_key_down(key)
+        self.key_handler.borrow().is_key_down(key)
     }
 
     pub fn set_key_repeat_delay(&mut self, delay: f32) {
-        self.key_handler.set_key_repeat_delay(delay)
+        self.key_handler.borrow_mut().set_key_repeat_delay(delay)
     }
 
     pub fn set_key_repeat_rate(&mut self, rate: f32) {
-        self.key_handler.set_key_repeat_rate(rate)
+        self.key_handler.borrow_mut().set_key_repeat_rate(rate)
     }
 
     pub fn is_key_pressed(&self, key: Key, repeat: KeyRepeat) -> bool {
-        self.key_handler.is_key_pressed(key, repeat)
+        self.key_handler.borrow().is_key_pressed(key, repeat)
     }
 
     pub fn is_key_released(&self, key: Key) -> bool {
-        self.key_handler.is_key_released(key)
+        self.key_handler.borrow().is_key_released(key)
     }
 
-    pub fn set_input_callback(&mut self, callback: Box<InputCallback>) {
-        self.key_handler.set_input_callback(callback)
+    pub fn set_input_callback(&mut self, callback: Box<dyn InputCallback>) {
+        self.key_handler.borrow_mut().set_input_callback(callback)
     }
 
     #[inline]
@@ -247,7 +345,7 @@ impl Window {
 
     #[inline]
     pub fn get_keys_released(&self) -> Option<Vec<Key>> {
-        self.key_handler.get_keys_released()
+        self.key_handler.borrow().get_keys_released()
     }
     pub fn is_active(&mut self) -> bool {
         true
@@ -273,11 +371,6 @@ impl Window {
 
     pub fn is_menu_pressed(&mut self) -> Option<usize> {
         None
-    }
-
-    fn update_key_state(&mut self, &event: web_sys::KeyboardEvent, is_down: bool) {
-        let key = event_to_key(event);
-        self.key_handler.set_key_state(key, is_down);
     }
 }
 
