@@ -1,4 +1,3 @@
-#![cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::Clamped;
 use wasm_bindgen::JsCast;
@@ -61,7 +60,16 @@ impl Window {
 
         canvas.set_width(width as u32);
         canvas.set_height(height as u32);
+        // set this to get the keyboard events
+        canvas.set_attribute("tabindex", "0").unwrap();
 
+        let on_keydown = EventListener::new(&canvas, "keydown", move |event| {
+            let keyboard_event = event.clone().dyn_into::<web_sys::KeyboardEvent>().unwrap();
+            self.update_key_state(keyboard_event, true);
+        });
+        //Keeps the EventListener alive forever, so it will never be dropped.
+        //This should only be used when you want the EventListener to last forever, otherwise it will leak memory!
+        on_keydown.forget();
         // Create an image buffer
         let context: CanvasRenderingContext2d = canvas
             .get_context("2d")
@@ -159,6 +167,7 @@ impl Window {
     }
 
     pub fn update(&mut self) {
+        self.key_handler.update();
         self.context
             .put_image_data(&self.img_data, 0.0, 0.0)
             .unwrap();
@@ -195,38 +204,40 @@ impl Window {
     #[inline]
     pub fn set_cursor_style(&mut self, cursor: CursorStyle) {}
 
-    #[inline]
     pub fn get_keys(&self) -> Option<Vec<Key>> {
-        None
+        self.key_handler.get_keys()
     }
 
-    #[inline]
     pub fn get_keys_pressed(&self, repeat: KeyRepeat) -> Option<Vec<Key>> {
-        None
+        self.key_handler.get_keys_pressed(repeat)
     }
 
-    #[inline]
+    pub fn get_keys_released(&self) -> Option<Vec<Key>> {
+        self.key_handler.get_keys_released()
+    }
+
     pub fn is_key_down(&self, key: Key) -> bool {
-        false
+        self.key_handler.is_key_down(key)
     }
 
-    #[inline]
-    pub fn set_input_callback(&mut self, callback: Box<dyn InputCallback>) {}
+    pub fn set_key_repeat_delay(&mut self, delay: f32) {
+        self.key_handler.set_key_repeat_delay(delay)
+    }
 
-    #[inline]
-    pub fn set_key_repeat_delay(&mut self, delay: f32) {}
+    pub fn set_key_repeat_rate(&mut self, rate: f32) {
+        self.key_handler.set_key_repeat_rate(rate)
+    }
 
-    #[inline]
-    pub fn set_key_repeat_rate(&mut self, rate: f32) {}
-
-    #[inline]
     pub fn is_key_pressed(&self, key: Key, repeat: KeyRepeat) -> bool {
-        false
+        self.key_handler.is_key_pressed(key, repeat)
     }
 
-    #[inline]
     pub fn is_key_released(&self, key: Key) -> bool {
-        false
+        self.key_handler.is_key_released(key)
+    }
+
+    pub fn set_input_callback(&mut self, callback: Box<InputCallback>) {
+        self.key_handler.set_input_callback(callback)
     }
 
     #[inline]
@@ -263,33 +274,8 @@ impl Window {
     pub fn is_menu_pressed(&mut self) -> Option<usize> {
         None
     }
-    
-    pub fn eventlistener_keyboardevent_keydown(&mut self){
-        let window = web_sys::window().expect("global window does not exists");    
-        let document = window.document().expect("expecting a document on window");
-    
-        let text_area = document.get_element_by_id("text_area")
-                                .unwrap()
-                                .dyn_into::<web_sys::HtmlTextAreaElement>()
-                                .unwrap();
-    
-        let message = document.get_element_by_id("message")
-                                .unwrap()
-                                .dyn_into::<web_sys::HtmlParagraphElement>()
-                                .unwrap();
-    
-        let on_keydown = EventListener::new(&text_area, "keydown", move |event| {
-    
-        let keyboard_event = event.clone()
-                            .dyn_into::<web_sys::KeyboardEvent>()
-                            .unwrap();
-        self.update_key_state(keyboard_event, true);
-        });
-    
-        on_keydown.forget();     
-        
-    }
-    fn update_key_state(&mut self, & event : web_sys::KeyboardEvent, is_down: bool) {
+
+    fn update_key_state(&mut self, &event: web_sys::KeyboardEvent, is_down: bool) {
         let key = event_to_key(event);
         self.key_handler.set_key_state(key, is_down);
     }

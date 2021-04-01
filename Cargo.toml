@@ -73,7 +73,7 @@ version = "0.3.48"
 optional = true
 features = [
 "console", "Window", "Document", "Navigator", "Element", "Node", "ImageData", "HtmlCanvasElement", "HtmlImageElement", "CanvasRenderingContext2d",
-"Headers", "Request", "RequestInit", "RequestMode", "Response", "Blob", "Url", "Gamepad", "GamepadButton", "GamepadEvent"
+"Headers", "Request", "RequestInit", "RequestMode", "Response", "Blob", "Url", "Gamepad", "GamepadButton", "GamepadEvent", 'MouseEvent', 'KeyboardEvent',
 ]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
