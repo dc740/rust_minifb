@@ -1,5 +1,5 @@
 mod keycodes;
-
+use web_sys::console;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::Clamped;
 use wasm_bindgen::JsCast;
@@ -76,7 +76,7 @@ impl Window {
         canvas.set_width(width as u32);
         canvas.set_height(height as u32);
         // set this to get the keyboard events
-        canvas.set_attribute("tabindex", "0").unwrap();
+        canvas.set_tab_index(0);
 
         // Create an image buffer
         let context: CanvasRenderingContext2d = canvas
@@ -88,7 +88,6 @@ impl Window {
         context.set_image_smoothing_enabled(false);
         let img_data = ImageData::new_with_sw(width as u32, height as u32).unwrap();
         let context = Rc::new(context);
-        //        let key_handler: Rc::<RefCell<KeyHandler>::new(RefCell::<KeyHandler>::new(key_handler));
         let key_handler = Rc::new(RefCell::new(KeyHandler::new()));
         let mouse_struct = MouseState {
             pos: Cell::new(None),
@@ -101,6 +100,7 @@ impl Window {
         {
             let key_handler = key_handler.clone();
             let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+                event.prevent_default();
                 let key = event_to_key(&event);
                 key_handler.borrow_mut().set_key_state(key, true);
             }) as Box<dyn FnMut(_)>);
@@ -110,6 +110,7 @@ impl Window {
         {
             let key_handler = key_handler.clone();
             let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+                event.prevent_default();
                 let key = event_to_key(&event);
                 key_handler.borrow_mut().set_key_state(key, false);
             }) as Box<dyn FnMut(_)>);
